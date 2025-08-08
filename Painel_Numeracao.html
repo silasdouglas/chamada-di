@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Painel de Emergência Infantil</title>
+  <!-- Tailwind CSS CDN para estilos modernos -->
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+  <!-- Botão de status do servidor, sempre visível no canto superior direito -->
+  <div id="status-container" class="fixed top-4 right-4 z-20">
+    <button id="server-status" class="px-4 py-2 rounded text-white bg-gray-500" disabled>
+      Status do Servidor
+    </button>
+  </div>
+
+  <main class="relative">
+    <!-- PRIMEIRA JANELA: Escolha da sala -->
+    <div id="window1" class="h-screen flex items-center justify-center relative">
+      <!-- Botão de histórico, grava últimas 5 chamadas em cache (aparece somente aqui) -->
+      <div id="history-container" class="absolute top-4 left-4 z-20">
+        <button id="history-btn" class="px-4 py-2 rounded text-white bg-blue-500 hover:bg-blue-600 transition">
+          Histórico
+        </button>
+      </div>
+      <div class="flex flex-col items-center space-y-4">
+        <button class="room-btn w-64 py-4 rounded-lg bg-white shadow hover:bg-blue-100 transition" data-room="Berçário">
+          Berçário
+        </button>
+        <button class="room-btn w-64 py-4 rounded-lg bg-white shadow hover:bg-blue-100 transition" data-room="02 a 04 anos">
+          02 a 04 anos
+        </button>
+        <button class="room-btn w-64 py-4 rounded-lg bg-white shadow hover:bg-blue-100 transition" data-room="05 a 08 anos">
+          05 a 08 anos
+        </button>
+        <button class="room-btn w-64 py-4 rounded-lg bg-white shadow hover:bg-blue-100 transition" data-room="09 a 12 anos">
+          09 a 12 anos
+        </button>
+      </div>
+    </div>
+
+    <!-- SEGUNDA JANELA: Mosaico de numeração -->
+    <div id="window2" class="hidden h-screen p-4 flex flex-col">
+      <!-- Botão Voltar fixo no topo esquerdo -->
+      <div id="back-container" class="fixed top-4 left-4 z-20">
+        <button id="back-btn" class="flex items-center justify-center p-2 bg-white rounded shadow hover:bg-gray-100 transition">
+          <!-- Ícone moderno de voltar (Heroicon SVG) -->
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+      </div>
+      <!-- Grid de 1 a 150 em 10 colunas -->
+      <div id="grid-container" class="grid grid-cols-10 gap-2 flex-1 overflow-auto mt-12"></div>
+    </div>
+
+    <!-- TERCEIRA JANELA: Pop-up de confirmação -->
+    <div id="popup" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-30">
+      <div class="bg-white p-6 rounded-lg shadow-lg w-80">
+        <p id="popup-text" class="mb-6 text-center text-lg"></p>
+        <div class="flex items-center justify-center space-x-4">
+          <button id="no-btn" class="px-6 py-2 rounded bg-red-500 text-white hover:bg-red-600 transition">
+            Não
+          </button>
+          <button id="yes-btn" class="px-6 py-2 rounded bg-green-500 text-white hover:bg-green-600 transition">
+            Sim
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- QUARTA JANELA: Status de envio -->
+    <div id="window4" class="hidden h-screen flex flex-col items-center justify-center space-y-4 p-4">
+      <p id="status-message" class="text-2xl font-semibold"></p>
+      <p id="detail-message" class="text-lg"></p>
+    </div>
+  </main>
+
+  <script>
+    let selectedRoom = null;
+    let selectedNumber = null;
+    let pendingPayload = null;
+    let ws = null;
+    let history = [];
+
+    const SERVER_IP = 'localhost'; // Defina o IP do servidor
+    const SERVER_PORT = '8081';    // Defina a porta do servidor
+
+    function addToHistory(room, number) {
+      history.unshift({ room, number });
+      if (history.length > 5) history.pop();
+    }
+
+    function showHistory() {
+      if (history.length === 0) {
+        alert('Nenhuma chamada no histórico.');
+      } else {
+        const list = history.map((h, i) => 
+          `${i + 1}. Sala ${h.room}, número ${h.number.toString().padStart(2, '0')}`
+        ).join('\n');
+        alert(`Últimas chamadas:\n${list}`);
+      }
+    }
+
+    function connectWebSocket() {
+      ws = new WebSocket(`ws://${SERVER_IP}:${SERVER_PORT}`);
+      ws.addEventListener('open', () => {
+        updateStatusButton();
+        if (pendingPayload) {
+          ws.send(pendingPayload);
+          showSuccess();
+          pendingPayload = null;
+        }
+      });
+      ws.addEventListener('close', updateStatusButton);
+      ws.addEventListener('error', updateStatusButton);
+    }
+
+    function updateStatusButton() {
+      const btn = document.getElementById('server-status');
+      if (!ws || ws.readyState === WebSocket.CONNECTING) {
+        btn.textContent = 'Conectando...';
+        btn.className = 'px-4 py-2 rounded text-white bg-gray-500';
+      } else if (ws.readyState === WebSocket.OPEN) {
+        btn.textContent = 'Servidor Ativo';
+        btn.className = 'px-4 py-2 rounded text-white bg-green-600';
+      } else {
+        btn.textContent = 'Servidor Inativo';
+        btn.className = 'px-4 py-2 rounded text-white bg-red-600';
+      }
+    }
+
+    function showWindow(id) {
+      ['window1','window2','window4'].forEach(w => document.getElementById(w).classList.add('hidden'));
+      document.getElementById(id).classList.remove('hidden');
+      document.getElementById('popup').classList.add('hidden');
+    }
+
+    function populateGrid() {
+      const container = document.getElementById('grid-container');
+      container.innerHTML = '';
+      for (let i = 1; i <= 150; i++) {
+        const btn = document.createElement('button');
+        btn.textContent = i.toString().padStart(2,'00');
+        btn.className = 'num-btn w-full h-12 rounded bg-white shadow hover:bg-blue-100 transition';
+        btn.dataset.number = i;
+        btn.addEventListener('click', () => openPopup(i));
+        container.appendChild(btn);
+      }
+    }
+
+    function openPopup(number) {
+      selectedNumber = number;
+      document.getElementById('popup-text').innerHTML = 
+        `Sala <strong>${selectedRoom}</strong>, número <strong>${number.toString().padStart(2,'00')}</strong>.`;
+      document.getElementById('popup').classList.remove('hidden');
+    }
+
+    function showSuccess() {
+      showWindow('window4');
+      document.getElementById('status-message').textContent = 'Mensagem Enviada com Sucesso';
+      document.getElementById('detail-message').textContent = 
+        `Sala ${selectedRoom}, número ${selectedNumber.toString().padStart(2,'00')}`;
+      addToHistory(selectedRoom, selectedNumber);
+      setTimeout(() => showWindow('window1'), 3000);
+    }
+
+    function showWaiting() {
+      showWindow('window4');
+      const msg = document.getElementById('status-message');
+      msg.textContent = 'Aguardando Resposta do Servidor...';
+      msg.className = 'text-2xl font-semibold text-red-600';
+      document.getElementById('detail-message').textContent = 
+        `Sala ${selectedRoom}, número ${selectedNumber.toString().padStart(2,'00')}`;
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      connectWebSocket();
+      setInterval(() => {
+        if (!ws || ws.readyState === WebSocket.CLOSED) connectWebSocket();
+      }, 5000);
+
+      populateGrid();
+
+      document.querySelectorAll('.room-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          selectedRoom = btn.dataset.room;
+          showWindow('window2');
+        });
+      });
+
+      document.getElementById('back-btn').addEventListener('click', () => showWindow('window1'));
+      document.getElementById('history-btn').addEventListener('click', showHistory);
+      document.getElementById('no-btn').addEventListener('click', () => document.getElementById('popup').classList.add('hidden'));
+      document.getElementById('yes-btn').addEventListener('click', () => {
+        document.getElementById('popup').classList.add('hidden');
+        const payload = JSON.stringify({ room: selectedRoom, number: selectedNumber });
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(payload);
+          showSuccess();
+        } else {
+          pendingPayload = payload;
+          showWaiting();
+        }
+      });
+    });
+  </script>
+</body>
+</html>
